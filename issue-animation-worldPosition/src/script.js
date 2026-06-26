@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import GUI from 'lil-gui'
-import { add, attribute, attributeArray, cameraFar, cameraNear, cameraPosition, cameraProjectionMatrix, cameraViewMatrix, color, cos, cross, deltaTime, diffuseColor, dot, exp, float, Fn, frontFacing, If, instancedArray, instanceIndex, linearDepth, luminance, mat2, materialColor, materialEmissive, max, min, mix, mul, mx_noise_float, nodeObject, normalize, normalMap, normalWorld, pass, TWO_PI, positionGeometry, positionView, positionViewDirection, positionWorld, positionWorldDirection, rand, range, reflect, rotate, screenCoordinate, screenUV, select, sin, step, texture, time, transformNormalToView, uniform, uv, varying, vec2, vec3, vec4, vertexStage, viewport, viewportLinearDepth, viewportSafeUV, viewportSharedTexture, viewportDepthTexture, depth, positionLocal, modelWorldMatrix } from 'three/tsl'
+import { add, attribute, attributeArray, cameraFar, cameraNear, cameraPosition, cameraProjectionMatrix, cameraViewMatrix, color, cos, cross, deltaTime, diffuseColor, dot, exp, float, Fn, frontFacing, If, instancedArray, instanceIndex, linearDepth, luminance, mat2, materialColor, materialEmissive, max, min, mix, mul, mx_noise_float, nodeObject, normalize, normalMap, normalWorld, pass, TWO_PI, positionGeometry, positionView, positionViewDirection, positionWorld, positionWorldDirection, rand, range, reflect, rotate, screenCoordinate, screenUV, select, sin, step, texture, time, transformNormalToView, uniform, uv, varying, vec2, vec3, vec4, vertexStage, viewport, viewportLinearDepth, viewportSafeUV, viewportSharedTexture, viewportDepthTexture, depth, positionLocal, modelWorldMatrix, hash } from 'three/tsl'
 import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js'
 import { hashBlur } from 'three/examples/jsm/tsl/display/hashBlur.js'
 import { GLTFLoader, TransformControls } from 'three/examples/jsm/Addons.js'
@@ -89,8 +89,12 @@ model.scene.traverse((child) =>
         {
             const newPosition = positionLocal.toVar()
 
-            newPosition.x.addAssign(positionWorld.y.mul(4).sin().mul(0.2))
+            // newPosition.x.addAssign(hash(positionWorld.y.mul(1000).toInt()).mul(10))
+            // newPosition.y.addAssign(hash(positionWorld.y.add(100).mul(1000).toInt()).mul(10))
+            // newPosition.x.addAssign(positionWorld.y.mul(4).sin().mul(0.2))
 
+	        // newPosition.x.addAssign( positionWorld.y.mul( 10 ).sin().mul( 10 ) );
+            
             return newPosition
         })()
 
