@@ -84,9 +84,9 @@ await renderer.init();
     material.userData.graphId = 'floor-physical'
 
     const fade = uv().sub(0.5).length().smoothstep(0.5, 0.2)
-        .toVar('fade')
+        // .toVar('fade')
         // .debug()
-        .toInspector('FloorFade')
+        // .toInspector('FloorFade')
 
     material.opacityNode = fade
 
