@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { 
     dot, cos, float, min, timerLocal, atan2, uniform, pass, bloom, 
     PI, PI2, color, positionLocal, rangeFog, sin, texture, tslFn, 
-    uv, vec2, vec3, vec4 
+    uv, vec2, vec3, vec4, attribute, instanceIndex, modelInstanceMatrix 
 } from 'three/webgpu'
 import gridMaterial from './GridMaterial'
 import Stats from 'stats-gl'
@@ -12,87 +12,97 @@ import Stats from 'stats-gl'
 /**
  * Setup & Canvas
  */
+const INSTANCE_COUNT = 50
 const gui = new GUI({ width: 350 })
 const canvas = document.querySelector('canvas.webgl')
 
 const scene = new THREE.Scene()
-scene.fogNode = rangeFog(color('#171617'), 2, 15)
+scene.fogNode = rangeFog(color('#171617'), 5, 45)
 
 /**
- * Loaders & Textures
+ * Textures
  */
 const textureLoader = new THREE.TextureLoader()
-
-const loadTexture = (path, colorSpace = null) => {
-    const tex = textureLoader.load(path)
-    tex.wrapS = THREE.RepeatWrapping
-    tex.wrapT = THREE.RepeatWrapping
-    if (colorSpace) tex.colorSpace = colorSpace
-    return tex
-}
-
-const perlinTexture = loadTexture('./perlinTexture.png')
-const uvCheckerTexture = loadTexture('./uvCheckerByValle.jpg', THREE.SRGBColorSpace)
+const perlinTexture = textureLoader.load('./perlinTexture.png')
+perlinTexture.wrapS = THREE.RepeatWrapping
+perlinTexture.wrapT = THREE.RepeatWrapping
 
 /**
  * Stats
  */
-const stats = new Stats({
-    logsPerSecond: 20, 
-    samplesLog: 100, 
-    samplesGraph: 10, 
-    precision: 2, 
-    horizontal: true,
-    minimal: false, 
-    mode: 2
-})
+const stats = new Stats({ logsPerSecond: 20, precision: 2, horizontal: true, mode: 2 })
 document.body.appendChild(stats.dom)
 
 /**
- * TSL Helper Functions
+ * Instanced Attributes Setup
  */
-const toRadialUv = tslFn(([uv, multiplier, rotation, offset]) => {
-    const centeredUv = uv.sub(0.5).toVar()
-    const distanceToCenter = centeredUv.length()
-    const angle = atan2(centeredUv.y, centeredUv.x)
-    const radialUv = vec2(angle.add(PI).div(PI2), distanceToCenter).toVar()
+const strengthArray = new Float32Array(INSTANCE_COUNT)
+const offsetArray = new Float32Array(INSTANCE_COUNT)
+const amplitudeArray = new Float32Array(INSTANCE_COUNT)
+const speedArray = new Float32Array(INSTANCE_COUNT)
+const colorArray = new Float32Array(INSTANCE_COUNT * 3)
+
+const dummyColor = new THREE.Color()
+const palette = ['#ff8b4d', '#4d9eff', '#ff4d6d', '#4dffaa', '#ffd04d']
+
+for (let i = 0; i < INSTANCE_COUNT; i++) {
+    strengthArray[i] = 0.5 + Math.random() * 1.0
+    offsetArray[i] = 0.1 + Math.random() * 0.4
+    amplitudeArray[i] = 0.1 + Math.random() * 0.25
+    speedArray[i] = 0.1 + Math.random() * 0.2
+
+    dummyColor.set(palette[Math.floor(Math.random() * palette.length)])
+    dummyColor.toArray(colorArray, i * 3)
+}
+
+// Instanced Geometry Attributes
+const cylinderGeometry = new THREE.CylinderGeometry(1, 1, 1, 20, 20, true)
+cylinderGeometry.translate(0, 0.5, 0)
+
+cylinderGeometry.setAttribute('aParabolStrength', new THREE.InstancedBufferAttribute(strengthArray, 1))
+cylinderGeometry.setAttribute('aParabolOffset', new THREE.InstancedBufferAttribute(offsetArray, 1))
+cylinderGeometry.setAttribute('aParabolAmplitude', new THREE.InstancedBufferAttribute(amplitudeArray, 1))
+cylinderGeometry.setAttribute('aSpeed', new THREE.InstancedBufferAttribute(speedArray, 1))
+cylinderGeometry.setAttribute('aEmissiveColor', new THREE.InstancedBufferAttribute(colorArray, 3))
+
+// TSL Attribute Nodes
+const parabolStrengthNode = attribute('aParabolStrength', 'float')
+const parabolOffsetNode = attribute('aParabolOffset', 'float')
+const parabolAmplitudeNode = attribute('aParabolAmplitude', 'float')
+const speedNode = attribute('aSpeed', 'float')
+const instanceColorNode = attribute('aEmissiveColor', 'vec3')
+
+/**
+ * TSL Shader Logic
+ */
+const toSkewedUv = tslFn(([uv, skew]) => vec2(
+    uv.x.add(uv.y.mul(skew.x)),
+    uv.y.add(uv.x.mul(skew.y))
+))
+
+const twistedCylinder = tslFn(([position]) => {
+    // Transform position through the instance matrix first
+    const worldPosition = modelInstanceMatrix.mul(vec4(position, 1.0)).xyz
     
-    radialUv.mulAssign(multiplier)
-    radialUv.x.addAssign(rotation)
-    radialUv.y.addAssign(offset)
+    const angle = atan2(worldPosition.z, worldPosition.x)
+    const elevation = worldPosition.y
+    const time = timerLocal().mul(speedNode)
 
-    return radialUv
-})
-
-const toSkewedUv = tslFn(([uv, skew]) => {
-    return vec2(
-        uv.x.add(uv.y.mul(skew.x)),
-        uv.y.add(uv.x.mul(skew.y))
-    )
-})
-
-const twistedCylinder = tslFn(([position, parabolStrength, parabolOffset, parabolAmplitude, time]) => {
-    const angle = atan2(position.z, position.x)
-    const elevation = position.y
-
-    const radius = parabolStrength.mul(position.y.sub(parabolOffset)).pow(2).add(parabolAmplitude)
+    const radius = parabolStrengthNode.mul(elevation.sub(parabolOffsetNode)).pow(2).add(parabolAmplitudeNode)
     const turbulence = sin(elevation.sub(time).mul(20).add(angle.mul(2))).mul(0.05)
     radius.addAssign(turbulence)
 
     return vec3(
-        cos(angle).mul(radius),
+        cos(angle).mul(radius).add(worldPosition.x),
         elevation,
-        sin(angle).mul(radius)
+        sin(angle).mul(radius).add(worldPosition.z)
     )
 })
 
-const luminance = tslFn(([color]) => {
-    return dot(color, vec3(0.2126, 0.7152, 0.0722))
-})
+const luminance = tslFn(([c]) => dot(c, vec3(0.2126, 0.7152, 0.0722)))
 
-// Reusable noise combiner to DRY up material node calculations
 const calculateNoiseLayers = tslFn(([timeOffset, channel1, channel2, scale1, scale2]) => {
-    const time = timerLocal().mul(timeScale).add(timeOffset)
+    const time = timerLocal().mul(speedNode).add(timeOffset)
 
     const noise1Uv = uv().add(vec2(time, time.negate())).toVar()
     noise1Uv.assign(toSkewedUv(noise1Uv, vec2(-1, 0)))
@@ -108,112 +118,83 @@ const calculateNoiseLayers = tslFn(([timeOffset, channel1, channel2, scale1, sca
 })
 
 /**
- * Uniforms & Geometries
+ * Unified Material Output Node
  */
-const emissiveColor = uniform(color('#ff8b4d'))
-const timeScale = uniform(0.15)
-const parabolStrength = uniform(1)
-const parabolOffset = uniform(0.3)
-const parabolAmplitude = uniform(0.2)
+const unifiedTornadoMaterial = new THREE.MeshBasicNodeMaterial({ 
+    transparent: true, 
+    side: THREE.DoubleSide 
+})
 
-const cylinderGeometry = new THREE.CylinderGeometry(1, 1, 1, 20, 20, true)
-cylinderGeometry.translate(0, 0.5, 0)
+unifiedTornadoMaterial.positionNode = twistedCylinder(positionLocal)
 
-const planeGeometry = new THREE.PlaneGeometry(1, 1)
+unifiedTornadoMaterial.outputNode = tslFn(() => {
+    // Emissive noise layer
+    const emissiveNoise = calculateNoiseLayers(0, 'r', 'g', vec2(2, 0.25), vec2(5, 1))
+    const emissiveFade = min(uv().y.smoothstep(0, 0.1), uv().y.smoothstep(1, 0.6))
+    const emissiveAlpha = emissiveNoise.mul(emissiveFade).smoothstep(0, 0.1)
 
-/**
- * Tornado Floor
- */
-const floorMaterial = new THREE.MeshBasicNodeMaterial({ transparent: true })
-floorMaterial.outputNode = tslFn(() => {
-    const time = timerLocal().mul(timeScale)
+    // Dark noise layer
+    const darkNoise = calculateNoiseLayers(123.4, 'g', 'b', vec2(2, 0.25), vec2(5, 1))
+    const darkFade = min(uv().y.smoothstep(0, 0.2), uv().y.smoothstep(1, 0.6))
+    const darkAlpha = darkNoise.mul(darkFade).smoothstep(0, 0.01)
 
-    const noise1Uv = toRadialUv(uv(), vec2(0.5, 0.5), time, time)
-    noise1Uv.assign(toSkewedUv(noise1Uv, vec2(-1, 0)))
-    noise1Uv.mulAssign(vec2(4, 1))
-    const noise1 = texture(perlinTexture, noise1Uv, 1).r.remap(0.45, 0.7)
+    // Combine emissive and dark layers in a single pass
+    const luma = luminance(instanceColorNode)
+    const brightColor = instanceColorNode.mul(1.2).div(luma)
+    
+    // Blend layers: dark layer cuts over the emissive layer
+    const finalColor = brightColor.mul(float(1.0).sub(darkAlpha))
+    const finalAlpha = max(emissiveAlpha, darkAlpha)
 
-    const noise2Uv = toRadialUv(uv(), vec2(2, 8), time.mul(2), time.mul(8))
-    noise2Uv.assign(toSkewedUv(noise2Uv, vec2(-0.25, 0)))
-    noise2Uv.mulAssign(vec2(2, 0.25))
-    const noise2 = texture(perlinTexture, noise2Uv, 1).b.remap(0.45, 0.7)
-
-    const distanceToCenter = uv().sub(0.5).toVar()
-    const outerFade = min(
-        distanceToCenter.length().smoothstep(0.5, 0.1),
-        distanceToCenter.length().smoothstep(0, 0.2)
-    )
-
-    const effect = noise1.mul(noise2).mul(outerFade).toVar()
-
-    return vec4(
-        emissiveColor.mul(float(0.2).step(effect)).mul(3),
-        effect.smoothstep(0, 0.01)
-    )
+    return vec4(finalColor, finalAlpha)
 })()
 
-const floor = new THREE.Mesh(planeGeometry, floorMaterial)
-floor.scale.setScalar(2)
-floor.position.y = 0.01
-floor.rotation.x = -Math.PI * 0.5
-scene.add(floor)
-
 /**
- * Emissive Layer
+ * Instanced Mesh Creation & Positioning
  */
-const emissiveMaterial = new THREE.MeshBasicNodeMaterial({ transparent: true, side: THREE.DoubleSide })
-emissiveMaterial.positionNode = twistedCylinder(positionLocal, parabolStrength, parabolOffset, parabolAmplitude.sub(0.05), timerLocal().mul(timeScale))
+const tornadoInstancedMesh = new THREE.InstancedMesh(cylinderGeometry, unifiedTornadoMaterial, INSTANCE_COUNT)
+const dummy = new THREE.Object3D()
 
-emissiveMaterial.outputNode = tslFn(() => {
-    const noise = calculateNoiseLayers(0, 'r', 'g', vec2(2, 0.25), vec2(5, 1))
-    const outerFade = min(uv().y.smoothstep(0, 0.1), uv().y.smoothstep(1, 0.6))
-    const effect = noise.mul(outerFade)
-    const emissiveLuminance = luminance(emissiveColor)
+// Scatter tornadoes across a grid field
+const gridSize = Math.ceil(Math.sqrt(INSTANCE_COUNT))
+const spacing = 4
 
-    return vec4(
-        emissiveColor.mul(1.2).div(emissiveLuminance),
-        effect.smoothstep(0, 0.1)
+for (let i = 0; i < INSTANCE_COUNT; i++) {
+    const row = Math.floor(i / gridSize)
+    const col = i % gridSize
+
+    dummy.position.set(
+        (col - gridSize / 2) * spacing + (Math.random() - 0.5) * 1.5,
+        0,
+        (row - gridSize / 2) * spacing + (Math.random() - 0.5) * 1.5
     )
-})()
+    
+    const scaleY = 1.5 + Math.random() * 2.0
+    const scaleXZ = 0.8 + Math.random() * 0.6
+    dummy.scale.set(scaleXZ, scaleY, scaleXZ)
+    dummy.rotation.y = Math.random() * Math.PI * 2
+    dummy.updateMatrix()
 
-const emissive = new THREE.Mesh(cylinderGeometry, emissiveMaterial)
-scene.add(emissive)
+    tornadoInstancedMesh.setMatrixAt(i, dummy.matrix)
+}
 
-/**
- * Dark Layer
- */
-const darkMaterial = new THREE.MeshBasicNodeMaterial({ transparent: true, side: THREE.DoubleSide })
-darkMaterial.positionNode = twistedCylinder(positionLocal, parabolStrength, parabolOffset, parabolAmplitude, timerLocal().mul(timeScale))
-
-darkMaterial.outputNode = tslFn(() => {
-    const noise = calculateNoiseLayers(123.4, 'g', 'b', vec2(2, 0.25), vec2(5, 1))
-    const outerFade = min(uv().y.smoothstep(0, 0.2), uv().y.smoothstep(1, 0.6))
-    const effect = noise.mul(outerFade)
-
-    return vec4(vec3(0), effect.smoothstep(0, 0.01))
-})()
-
-const dark = new THREE.Mesh(cylinderGeometry, darkMaterial)
-scene.add(dark)
+tornadoInstancedMesh.instanceMatrix.needsUpdate = true
+scene.add(tornadoInstancedMesh)
 
 /**
- * Floor Grid
+ * Grid & Camera Setup
  */
-const grid = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), gridMaterial)
+const grid = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), gridMaterial)
 grid.rotation.x = -Math.PI * 0.5
 scene.add(grid)
 
-/**
- * Screen / Camera / Renderer
- */
 const sizes = { width: window.innerWidth, height: window.innerHeight }
-
-const camera = new THREE.PerspectiveCamera(25, sizes.width / sizes.height, 0.1, 100)
-camera.position.set(1, 1, 3)
+const camera = new THREE.PerspectiveCamera(35, sizes.width / sizes.height, 0.1, 150)
+camera.position.set(12, 12, 25)
 scene.add(camera)
 
 const controls = new OrbitControls(camera, canvas)
-controls.target.y = 0.4
+controls.target.set(0, 2, 0)
 controls.enableDamping = true
 
 const renderer = new THREE.WebGPURenderer({ canvas, antialias: true })
@@ -224,10 +205,8 @@ renderer.setClearColor('#171617')
 window.addEventListener('resize', () => {
     sizes.width = window.innerWidth
     sizes.height = window.innerHeight
-
     camera.aspect = sizes.width / sizes.height
     camera.updateProjectionMatrix()
-
     renderer.setSize(sizes.width, sizes.height)
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 })
@@ -238,29 +217,12 @@ window.addEventListener('resize', () => {
 const postProcessing = new THREE.PostProcessing(renderer)
 const scenePass = pass(scene, camera)
 const scenePassColor = scenePass.getTextureNode('output')
-const bloomPass = bloom(scenePassColor, 1, 0.1, 1)
+const bloomPass = bloom(scenePassColor, 0.8, 0.2, 0.8)
 
 postProcessing.outputNode = scenePassColor.add(bloomPass)
 
 /**
- * GUI Integration
- */
-const tornadoGui = gui.addFolder('Tornado Settings')
-tornadoGui.addColor({ color: emissiveColor.value.getHexString(THREE.SRGBColorSpace) }, 'color')
-    .name('Color')
-    .onChange(v => emissiveColor.value.set(v))
-tornadoGui.add(timeScale, 'value', -1, 1, 0.01).name('Time Scale')
-tornadoGui.add(parabolStrength, 'value', 0, 2, 0.01).name('Parabola Strength')
-tornadoGui.add(parabolOffset, 'value', 0, 1, 0.01).name('Parabola Offset')
-tornadoGui.add(parabolAmplitude, 'value', 0, 2, 0.01).name('Parabola Amplitude')
-
-const bloomGui = gui.addFolder('Bloom Settings')
-bloomGui.add(bloomPass.strength, 'value', 0, 10, 0.01).name('Strength')
-bloomGui.add(bloomPass.radius, 'value', 0, 1, 0.01).name('Radius')
-bloomGui.add(bloomPass.threshold, 'value', 0, 1, 0.01).name('Threshold')
-
-/**
- * Animation Loop
+ * Render Loop
  */
 renderer.setAnimationLoop(() => {
     stats.begin()
